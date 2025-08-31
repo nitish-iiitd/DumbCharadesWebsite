@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <title>Dumb Charades — Bollywood Picker</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎬</text></svg>">
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Bootstrap -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        :root { --bg: #f6f7fb; --card: #ffffff; }
+        body { background: var(--bg); }
+        .app-card { border-radius: 18px; background: var(--card); }
+        .title-display {
+            font-size: clamp(1.6rem, 4vw, 2.6rem);
+            font-weight: 800;
+            letter-spacing: .2px;
+            line-height: 1.25;
+            word-break: break-word;
+        }
+        .muted { color: #6c757d; }
+        .brand { font-weight: 700; }
+        .btn-lg { padding-top: .9rem; padding-bottom: .9rem; }
+        .fade-in { animation: fade .25s ease-in; }
+        @keyframes fade { from {opacity: 0} to {opacity: 1} }
+        .small-note { font-size: .9rem; }
+    </style>
+</head>
+<body>
+<nav class="navbar navbar-light bg-white border-bottom">
+    <div class="container">
+        <span class="navbar-brand brand">🎬 Dumb Charades</span>
+        <div class="small text-muted">No repeats until all are done</div>
+    </div>
+</nav>
+
+<main class="container my-4">
+        <!-- Intro Screen -->
+        <div id="introScreen" class="row justify-content-center">
+            <div class="col-lg-8">
+                <div class="app-card shadow-sm p-5 text-center">
+                    <h2 class="mb-3">🎬 Dumb Charades</h2>
+                    <p class="lead">The classic Bollywood party game — act out the movie title without speaking and let your friends guess!</p>
+                    <p class="text-muted small">
+                        Developed by <a href="https://nitishsrivastava.dev" target="_blank" rel="noopener noreferrer">
+                        Nitish Srivastava
+                    </a>
+                    </p>
+                    <div class="d-grid mt-4">
+                        <button id="startBtn" class="btn btn-success btn-lg">▶ Start Game</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Game Screen -->
+        <div id="gameScreen" class="d-none">
+            <div id="alertBox" class="alert d-none" role="alert"></div>
+
+            <div class="row justify-content-center">
+                <div class="col-lg-8">
+                    <div class="app-card shadow-sm p-4">
+                        <div class="d-flex gap-4 flex-wrap justify-content-between">
+                            <div>
+                                <div class="muted">Total</div>
+                                <div class="fs-5" id="totalCount">—</div>
+                            </div>
+                            <div>
+                                <div class="muted">Remaining this round</div>
+                                <div class="fs-5" id="remainingCount">—</div>
+                            </div>
+                        </div>
+
+                        <hr class="my-4">
+
+                        <div class="text-center">
+                            <div class="muted mb-2">Current Movie</div>
+                            <div id="movieTitle" class="title-display">Press Next to begin!</div>
+                        </div>
+
+                        <div class="d-grid gap-2 mt-4">
+                            <button id="nextBtn" class="btn btn-primary btn-lg">🎲 Next movie</button>
+                        </div>
+
+                        <div class="d-flex justify-content-between align-items-center mt-3">
+                            <button id="resetBtn" class="btn btn-outline-secondary btn-sm">Reset round</button>
+                            <button id="copyBtn" class="btn btn-outline-primary btn-sm">Copy title</button>
+                        </div>
+
+                        <div id="toast" class="alert alert-info d-none mt-3 mb-0">New round! List reshuffled 🔁</div>
+
+                        <div class="mt-3 small-note text-muted">
+                            Tip: Progress is saved locally on this browser. Replace <code>movies.txt</code> to change the list (one title per line).
+                        </div>
+
+                        <div class="mt-4 text-center small text-muted">
+                            Developed by <a href="https://nitishsrivastava.dev" target="_blank" rel="noopener noreferrer">
+                            Nitish Srivastava
+                        </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+</main>
+
+<script>
+    // -------- Configuration --------
+    const MOVIES_URL = 'movies.txt'; // same folder as index.html
+    const STORAGE_PREFIX = 'dc_v1_';
+    const K_HASH   = STORAGE_PREFIX + 'titles_hash';
+    const K_ORDER  = STORAGE_PREFIX + 'order';
+    const K_CURSOR = STORAGE_PREFIX + 'cursor';
+    const K_SEED   = STORAGE_PREFIX + 'seed';
+    const K_SIZE   = STORAGE_PREFIX + 'size';
+
+    // -------- Utilities --------
+    const $ = sel => document.querySelector(sel);
+    const alertBox = $('#alertBox');
+
+    function showAlert(msg, type='warning') {
+        alertBox.className = `alert alert-${type}`;
+        alertBox.textContent = msg;
+        alertBox.classList.remove('d-none');
+    }
+    function hideAlert() { alertBox.classList.add('d-none'); }
+
+    // Simple deterministic hash (djb2)
+    function djb2(str) {
+        let h = 5381;
+        for (let i = 0; i < str.length; i++) {
+            h = ((h << 5) + h) + str.charCodeAt(i);
+            h = h & 0xffffffff;
+        }
+        return String(h >>> 0);
+    }
+
+    // RNG with seed (Mulberry32)
+    function mulberry32(seed) {
+        return function() {
+            let t = seed += 0x6D2B79F5;
+            t = Math.imul(t ^ (t >>> 15), t | 1);
+            t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        }
+    }
+
+    function shuffleIndices(n, seed) {
+        const order = Array.from({length: n}, (_, i) => i);
+        const rand = mulberry32(seed);
+        // Fisher–Yates
+        for (let i = n - 1; i > 0; i--) {
+            const j = Math.floor(rand() * (i + 1));
+            [order[i], order[j]] = [order[j], order[i]];
+        }
+        return order;
+    }
+
+    function newSeed() {
+        if (window.crypto?.getRandomValues) {
+            const a = new Uint32Array(1);
+            crypto.getRandomValues(a);
+            return a[0] >>> 0;
+        }
+        return Math.floor(Math.random() * 2**32) >>> 0;
+    }
+
+    // -------- State --------
+    let MOVIES = [];
+    let order = [];
+    let cursor = 0;
+    let seed = newSeed();
+    let titlesHash = '';
+
+    function saveState() {
+        localStorage.setItem(K_ORDER, JSON.stringify(order));
+        localStorage.setItem(K_CURSOR, String(cursor));
+        localStorage.setItem(K_SEED, String(seed));
+        localStorage.setItem(K_HASH, titlesHash);
+        localStorage.setItem(K_SIZE, String(MOVIES.length));
+    }
+
+    function loadState() {
+        try {
+            order = JSON.parse(localStorage.getItem(K_ORDER) || '[]');
+        } catch { order = []; }
+        cursor = parseInt(localStorage.getItem(K_CURSOR) || '0', 10);
+        seed = parseInt(localStorage.getItem(K_SEED) || String(newSeed()), 10);
+    }
+
+    function resetRound(newSeedVal = newSeed()) {
+        seed = newSeedVal >>> 0;
+        order = shuffleIndices(MOVIES.length, seed);
+        cursor = 0;                // nothing shown yet in the new round
+        saveState();
+        showToast('New round! List reshuffled 🔁');
+        render();
+    }
+
+    function showToast(msg) {
+        const t = document.getElementById('toast');
+        t.textContent = msg;
+        t.classList.remove('d-none');
+        setTimeout(() => t.classList.add('d-none'), 2000);
+    }
+
+    function uniqueLines(lines) {
+        const out = [];
+        const seen = new Set();
+        for (let raw of lines) {
+            if (!raw) continue;
+            const t = raw.replace(/^\uFEFF/, '').trim(); // strip BOM and trim
+            if (!t) continue;
+            const k = t.toLowerCase();
+            if (!seen.has(k)) {
+                seen.add(k);
+                out.push(t);
+            }
+        }
+        return out;
+    }
+
+    // -------- UI --------
+    function render() {
+        const total = MOVIES.length;
+        const remaining = Math.max(0, total - cursor);
+        document.getElementById('totalCount').textContent = total;
+        document.getElementById('remainingCount').textContent = remaining;
+
+        const titleEl = document.getElementById('movieTitle');
+        if (total === 0) {
+            titleEl.textContent = 'No movies loaded.';
+            return;
+        }
+
+        // If we haven't shown anything yet, keep the prompt;
+        // otherwise show the last served movie at cursor-1
+        if (cursor === 0) {
+            titleEl.textContent = 'Press Start to begin!';
+        } else {
+            const shownIdx = order[Math.min(cursor - 1, order.length - 1)];
+            titleEl.textContent = MOVIES[shownIdx] ?? '—';
+        }
+
+        titleEl.classList.add('fade-in');
+        setTimeout(() => titleEl.classList.remove('fade-in'), 250);
+    }
+
+    async function nextMovie() {
+        if (MOVIES.length === 0) return;
+
+        // reshuffle when exhausted
+        if (cursor >= MOVIES.length) {
+            resetRound();
+            return;
+        }
+
+        // serve current cursor index, then advance
+        const idx = order[cursor];
+        const title = MOVIES[idx];
+        cursor += 1;
+        saveState();
+
+        // Update UI with the title we just served
+        document.getElementById('movieTitle').textContent = title;
+        document.getElementById('remainingCount').textContent = Math.max(0, MOVIES.length - cursor);
+    }
+
+    function copyTitle() {
+        const t = document.getElementById('movieTitle').textContent || '';
+        if (!t || t === 'Loading…') return;
+        navigator.clipboard?.writeText(t).then(() => {
+            showToast('Copied to clipboard ✅');
+        }).catch(() => {
+            showToast('Copy failed. Long-press or select manually.');
+        });
+    }
+
+    // -------- Boot --------
+    (async function init() {
+        hideAlert();
+        let txt;
+        try {
+            const res = await fetch(MOVIES_URL, { cache: 'no-store' });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            txt = await res.text();
+        } catch (e) {
+            showAlert(`Could not load movies.txt (${e.message}). Make sure it sits next to index.html on CF Pages.`, 'danger');
+            return;
+        }
+
+        // Parse & de-dup
+        const lines = txt.split(/\r?\n/);
+        MOVIES = uniqueLines(lines);
+
+        if (MOVIES.length === 0) {
+            showAlert('movies.txt is empty. Add one title per line.', 'warning');
+        }
+
+        // Versioning with hash — reset if file changed
+        titlesHash = djb2(MOVIES.join('\n'));
+        const oldHash = localStorage.getItem(K_HASH);
+        const oldSize = parseInt(localStorage.getItem(K_SIZE) || '0', 10);
+
+        if (oldHash !== titlesHash || oldSize !== MOVIES.length) {
+            // new list → make a fresh round
+            order = shuffleIndices(MOVIES.length, newSeed());
+            cursor = 0;
+            saveState();
+        } else {
+            // try loading prior state
+            loadState();
+            if (!Array.isArray(order) || order.length !== MOVIES.length) {
+                order = shuffleIndices(MOVIES.length, seed);
+                cursor = 0;
+                saveState();
+            }
+            if (cursor > MOVIES.length) cursor = 0;
+        }
+
+        // Wire buttons
+        document.getElementById('nextBtn').addEventListener('click', nextMovie);
+        document.getElementById('resetBtn').addEventListener('click', () => resetRound());
+        document.getElementById('copyBtn').addEventListener('click', copyTitle);
+        document.getElementById('startBtn').addEventListener('click', () => {
+            document.getElementById('introScreen').classList.add('d-none');
+            document.getElementById('gameScreen').classList.remove('d-none');
+            // If this is a fresh round (cursor==0), serve the first movie now.
+            // If user already had progress (cursor>0), just render the last shown.
+            if (cursor === 0) {
+                nextMovie();   // shows movie #1 and sets cursor=1
+            } else {
+                render();      // resume view without advancing
+            }
+        });
+
+        render();
+    })();
+</script>
+</body>
+</html>
